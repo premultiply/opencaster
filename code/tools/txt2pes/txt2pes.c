@@ -54,6 +54,9 @@ int main(int argc, char *argv[])
 	int packet_index = 0;
 	int txtunitperpes = 0;
 	int pts_increment = 3600;
+	int txtunit = 0;
+	int fieldmarker = 1;
+	int buffer_offset = 0;
 	
 	/*  Parse args */
 	if (argc > 2) {
@@ -98,22 +101,26 @@ int main(int argc, char *argv[])
 	/* Process the es txt file */
 	byte_read = 1;
 	while (byte_read) {
-		/*
-		byte_read = read(file_es, pes_packet + packet_index, 1);
-		if (pes_packet[packet_index] == 0x10) {
-			byte_read = read(file_es, pes_packet + packet_index, EBU_UNIT_SIZE);
-		} else {
-			byte_read = read(file_es, pes_packet + packet_index + 1, EBU_UNIT_SIZE - 1);
-		}
-		*/
-		byte_read = read(file_es, pes_packet + packet_index, EBU_UNIT_SIZE);
+		byte_read = read(file_es, pes_packet + packet_index + 4 + buffer_offset, EBU_UNIT_SIZE - 4 - buffer_offset);
 		if (byte_read != 0) {
-			packet_index += EBU_UNIT_SIZE;
-			if (packet_index == pes_size) {
-				stamp_ts(pts_stamp, pes_packet + 9);
-				write(STDOUT_FILENO, pes_packet, pes_size);
-				pts_stamp += pts_increment;
-				packet_index = EBU_UNIT_SIZE;
+			buffer_offset += byte_read;
+			if (buffer_offset < (EBU_UNIT_SIZE - 4)) fprintf(stderr, "Only read %d bytes\n", byte_read);
+			else {
+				pes_packet[packet_index + 0] = 0x02; // data_unit_id(8)
+				pes_packet[packet_index + 1] = 0x2c; // data_unit_length(8)
+				pes_packet[packet_index + 2] = (0x40) | (fieldmarker << 5) | (((22 - txtunitperpes + txtunit)) & 0x1f); // reserved_future_use(2), field_parity(1), line_offset(5)
+				pes_packet[packet_index + 3] = 0xe4; // framing_code(8)
+				packet_index += EBU_UNIT_SIZE;
+				buffer_offset = 0;
+				txtunit++;
+				if (packet_index == pes_size) {
+					stamp_ts(pts_stamp, pes_packet + 9);
+					write(STDOUT_FILENO, pes_packet, pes_size);
+					pts_stamp += pts_increment;
+					packet_index = EBU_UNIT_SIZE;
+					fieldmarker ^= 1;
+					txtunit = 0;
+				}
 			}
 		} else {
 			close(file_es);
