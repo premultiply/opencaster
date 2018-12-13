@@ -53,7 +53,7 @@ int main(int argc, char *argv[])
 	int file_es = 0;
 	int packet_index = 0;
 	int txtunitperpes = 0;
-	int pts_increment = 3600;
+	int pts_increment = 1800;
 	int txtunit = 0;
 	int fieldmarker = 1;
 	int buffer_offset = 0;
@@ -73,8 +73,9 @@ int main(int argc, char *argv[])
 	if (file_es == 0) {
 		fprintf(stderr, "Usage: 'txt2pes txt.es txt_units_per_pes_packet [pts_offset [pts_increment]] > pes'\n");
 		fprintf(stderr, "txt_unit_per_pes_packet increase bit rate, minimum is 1, max is 24\n");
-		fprintf(stderr, "Default pts_offset and increment is 3600, means 2 fields or 1 frame\n");
-		fprintf(stderr, "txt.es is 46 byte units of ebu teletext coding\n");
+		fprintf(stderr, "Set pts_increment to 0 to disable pts stamping\n");
+		fprintf(stderr, "Default pts_offset 3600 and increment is 1800, means 2 fields or 1 frame\n");
+		fprintf(stderr, "txt.es is 42 byte units of ebu teletext coding\n");
 		return 2;
 	} 
 	
@@ -82,6 +83,7 @@ int main(int argc, char *argv[])
 	pes_packet = malloc(pes_size);
 	
 	fprintf(stderr, "pes packet size without 6 byte header is %d\n", pes_size - 6);
+	fprintf(stderr, "pes bitrate is %d bit/s\n", ((pes_size-1)/184+1) * 188 * 8 * (90000/(pts_increment > 0 ? pts_increment : 1800)));
 	
 	/* Set some init. values */
 	memset(pes_packet, 0xFF, pes_size);
@@ -92,7 +94,12 @@ int main(int argc, char *argv[])
 	unsigned short temp = htons(pes_size - 6);
 	memcpy(pes_packet + 4, &temp, sizeof(unsigned short)); 
 	pes_packet[6] = 0x8F;
-	pes_packet[7] = 0x80; /* flags */
+	if (pts_increment > 0) {
+		pes_packet[7] = 0x2 << 6; /* flags */ //pts_dts_flags: 0x2 (2) => PTS fields shall be present in the PES packet header
+	} else {
+		pes_packet[7] = 0x0 << 6; /* flags */ //pts_dts_flags: 0x0 (0) => no PTS or DTS fields shall be present in the PES packet header
+	}
+
 	pes_packet[8] = 0x24; /* header size */
 	/* 31 0xFF stuffing is here */
 	pes_packet[45] = 0x10; /* ebu teletext */
@@ -104,8 +111,7 @@ int main(int argc, char *argv[])
 		byte_read = read(file_es, pes_packet + packet_index + 4 + buffer_offset, EBU_UNIT_SIZE - 4 - buffer_offset);
 		if (byte_read != 0) {
 			buffer_offset += byte_read;
-			if (buffer_offset < (EBU_UNIT_SIZE - 4)) fprintf(stderr, "Only read %d bytes\n", byte_read);
-			else {
+			if (buffer_offset == (EBU_UNIT_SIZE - 4)) {
 				pes_packet[packet_index + 0] = 0x02; // data_unit_id(8)
 				pes_packet[packet_index + 1] = 0x2c; // data_unit_length(8)
 				pes_packet[packet_index + 2] = (0x40) | (fieldmarker << 5) | (((22 - txtunitperpes + txtunit)) & 0x1f); // reserved_future_use(2), field_parity(1), line_offset(5)
@@ -114,9 +120,11 @@ int main(int argc, char *argv[])
 				buffer_offset = 0;
 				txtunit++;
 				if (packet_index == pes_size) {
-					stamp_ts(pts_stamp, pes_packet + 9);
+					if (pts_increment > 0) {
+						stamp_ts(pts_stamp, pes_packet + 9);
+						pts_stamp += pts_increment;
+					}
 					write(STDOUT_FILENO, pes_packet, pes_size);
-					pts_stamp += pts_increment;
 					packet_index = EBU_UNIT_SIZE;
 					fieldmarker ^= 1;
 					txtunit = 0;
